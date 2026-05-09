@@ -18,7 +18,27 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- DETECTOR MULTI-BANCO MEJORADO ---
+# --- FUNCIÓN PARA LIMPIAR NÚMEROS (CORREGIDA) ---
+def limpiar_monto(monto_str):
+    # Eliminamos símbolos de pesos y espacios
+    monto_str = monto_str.replace("$", "").strip()
+    
+    # Si tiene punto y coma (ej: 512.512,14)
+    if "." in monto_str and "," in monto_str:
+        monto_str = monto_str.replace(".", "").replace(",", ".")
+    # Si solo tiene punto pero parece de miles (ej: 512.512)
+    elif "." in monto_str and len(monto_str.split(".")[-1]) == 3:
+        monto_str = monto_str.replace(".", "")
+    # Si tiene una coma como decimal (ej: 1234,56)
+    elif "," in monto_str:
+        monto_str = monto_str.replace(",", ".")
+        
+    try:
+        return float(monto_str)
+    except:
+        return 0.0
+
+# --- DETECTOR MULTI-BANCO ---
 def procesar_archivo_universal(pdf_file):
     try:
         with pdfplumber.open(pdf_file) as pdf:
@@ -27,30 +47,30 @@ def procesar_archivo_universal(pdf_file):
 
             texto_upper = texto.upper()
 
-            # 1. BBVA (Lo ponemos primero para evitar que otros lo pisen)
+            # 1. BBVA 
             if "BBVA" in texto_upper:
                 match = re.search(r"SALDO ACTUAL\s*[\$]*\s*([\d\.,]+)", texto_upper)
-                if match: return "BBVA VISA", float(match.group(1).replace(".", "").replace(",", "."))
+                if match: return "BBVA VISA", limpiar_monto(match.group(1))
 
-            # 2. RECIBO ANSA
+            # 2. RECIBO ANSA (Corregido para tu formato exacto)
             if "TOTAL NETO->" in texto_upper:
                 match = re.search(r"TOTAL NETO->\s*([\d\.,]+)", texto_upper)
-                if match: return "RECIBO ANSA", float(match.group(1).replace(".", "").replace(",", "."))
+                if match: return "RECIBO ANSA", limpiar_monto(match.group(1))
 
             # 3. BANCO MACRO
             if "DEBITAREMOS DE SU C.A." in texto_upper:
                 match = re.search(r"LA SUMA DE\s*\$\s*([\d\.,]+)", texto_upper)
-                if match: return "MACRO VISA", float(match.group(1).replace(".", "").replace(",", "."))
+                if match: return "MACRO VISA", limpiar_monto(match.group(1))
 
             # 4. MERCADO PAGO
-            if "MERCADO PAGO" in texto_upper:
+            if "MERCADO PAGO" in texto_upper or "TOTAL A PAGAR" in texto_upper:
                 match = re.search(r"TOTAL A PAGAR\s*[\$]*\s*([\d\.,]+)", texto_upper)
-                if match: return "MERCADO PAGO", float(match.group(1).replace(".", "").replace(",", "."))
+                if match: return "MERCADO PAGO", limpiar_monto(match.group(1))
 
             # 5. TARJETA NARANJA
             if "NARANJA" in texto_upper:
                 match = re.search(r"TOTAL\s*\$\s*([\d\.,]+)", texto_upper)
-                if match: return "NARANJA", float(match.group(1).replace(".", "").replace(",", "."))
+                if match: return "NARANJA", limpiar_monto(match.group(1))
 
     except: return None, 0
     return "DESCONOCIDO", 0
@@ -60,7 +80,7 @@ if 'historial' not in st.session_state: st.session_state.historial = []
 if 'ingresos' not in st.session_state: st.session_state.ingresos = 0.0
 
 # --- SIDEBAR ---
-st.sidebar.title("📅 Filtros")
+st.sidebar.title("📅 Periodo")
 mes_sel = st.sidebar.selectbox("Mes", ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"], index=datetime.now().month - 1)
 anio_sel = st.sidebar.selectbox("Año", [2024, 2025, 2026], index=2)
 
@@ -85,24 +105,21 @@ if archivo:
     tipo, monto = procesar_archivo_universal(archivo)
     
     if tipo == "ERROR_IMAGEN":
-        st.error("⚠️ PDF sin texto. Usá Adobe Scan.")
+        st.error("⚠️ Recordá usar Adobe Scan.")
     elif tipo == "RECIBO ANSA":
         st.session_state.ingresos = monto
-        st.success(f"✅ Ingreso cargado: $ {monto:,.2f}")
+        st.success(f"✅ Sueldo corregido: $ {monto:,.2f}")
     elif tipo != "DESCONOCIDO":
-        # Evitar duplicar el mismo archivo físico
         if not any(d['nombre'] == archivo.name for d in st.session_state.historial):
             st.session_state.historial.append({"nombre": archivo.name, "tipo": tipo, "monto": monto})
-            st.success(f"✅ {tipo} detectada: $ {monto:,.2f}")
-    else:
-        st.warning("❓ No pude identificar el banco automáticamente.")
+            st.success(f"✅ {tipo} sumada.")
 
 # --- TABLA Y GRÁFICO ---
 col_t, col_g = st.columns([1, 1])
 
 with col_t:
-    st.write("**Detalle de consumos:**")
     if st.session_state.historial:
+        st.write("**Detalle de consumos:**")
         df = pd.DataFrame(st.session_state.historial)
         st.dataframe(df[['tipo', 'monto']], use_container_width=True)
         if st.button("🗑️ Reiniciar Mes"):
@@ -112,13 +129,8 @@ with col_t:
 
 with col_g:
     if st.session_state.ingresos > 0 or gastos_totales > 0:
-        datos_grafico = {item['tipo']: item['monto'] for item in st.session_state.historial}
-        if balance > 0: datos_grafico['Disponible'] = balance
-        
-        fig = px.pie(
-            values=list(datos_grafico.values()),
-            names=list(datos_grafico.keys()),
-            hole=0.6,
-            template="plotly_dark"
-        )
+        # Preparamos datos limpios para el gráfico
+        datos = {item['tipo']: item['monto'] for item in st.session_state.historial}
+        if balance > 0: datos['Disponible'] = balance
+        fig = px.pie(values=list(datos.values()), names=list(datos.keys()), hole=0.6, template="plotly_dark")
         st.plotly_chart(fig, use_container_width=True)
