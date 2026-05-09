@@ -66,8 +66,7 @@ def procesar_archivo_universal(pdf_file):
 # --- LÓGICA DE ESTADO ---
 if 'historial' not in st.session_state: st.session_state.historial = []
 if 'ingresos' not in st.session_state: st.session_state.ingresos = 0.0
-# Guardamos el nombre del último archivo para no procesarlo en bucle
-if 'ultimo_archivo' not in st.session_state: st.session_state.ultimo_archivo = None
+if 'archivos_procesados' not in st.session_state: st.session_state.archivos_procesados = []
 
 # --- SIDEBAR ---
 st.sidebar.title("📅 Periodo")
@@ -75,52 +74,56 @@ mes_sel = st.sidebar.selectbox("Mes", ["Enero", "Febrero", "Marzo", "Abril", "Ma
 anio_sel = st.sidebar.selectbox("Año", [2024, 2025, 2026], index=2)
 
 # --- CÁLCULOS ---
-gastos_totales = sum([item['monto'] for item in st.session_state.historial if "RECIBO" not in item['tipo']])
+gastos_totales = sum([item['monto'] for item in st.session_state.historial if item['tipo'] != "RECIBO ANSA"])
 balance = st.session_state.ingresos - gastos_totales
 
 # --- INTERFAZ ---
 st.title(f"📊 Dashboard: {mes_sel} {anio_sel}")
 
 c1, c2, c3 = st.columns(3)
-c1.metric("💰 INGRESOS", f"$ {st.session_state.ingresos:,.2f}")
+c1.metric("💰 INGRESOS TOTALES", f"$ {st.session_state.ingresos:,.2f}")
 c2.metric("💳 GASTOS TARJETAS", f"$ {gastos_totales:,.2f}")
 c3.metric("⚖️ DISPONIBLE", f"$ {balance:,.2f}")
 
 st.divider()
 
 st.subheader("📁 Cargar PDF (Recibo o Tarjeta)")
-archivo = st.file_uploader("Subí tu archivo aquí", type="pdf")
+archivo = st.file_uploader("Subí tus archivos aquí", type="pdf")
 
-# --- PROCESAMIENTO CON AUTO-REFRESCO ---
-if archivo and archivo.name != st.session_state.ultimo_archivo:
+# --- PROCESAMIENTO ACUMULATIVO ---
+if archivo and archivo.name not in st.session_state.archivos_procesados:
     tipo, monto = procesar_archivo_universal(archivo)
     
     if tipo == "RECIBO ANSA":
-        st.session_state.ingresos = monto
-        st.session_state.ultimo_archivo = archivo.name
-        st.rerun() # Fuerza la actualización de los indicadores arriba
+        # Sumamos el nuevo recibo al ingreso existente
+        st.session_state.ingresos += monto
+        st.session_state.archivos_procesados.append(archivo.name)
+        st.rerun()
     elif tipo != "DESCONOCIDO" and tipo != "ERROR_IMAGEN":
         st.session_state.historial.append({"nombre": archivo.name, "tipo": tipo, "monto": monto})
-        st.session_state.ultimo_archivo = archivo.name
-        st.rerun() # Fuerza la actualización de los indicadores arriba
+        st.session_state.archivos_procesados.append(archivo.name)
+        st.rerun()
 
-# Mostrar mensajes de éxito persistentes
-if st.session_state.ultimo_archivo:
-    st.success(f"✅ Último archivo procesado: {st.session_state.ultimo_archivo}")
+# Mostrar qué archivos se cargaron en el mes
+if st.session_state.archivos_procesados:
+    with st.expander("📄 Archivos cargados en este periodo"):
+        for f in st.session_state.archivos_procesados:
+            st.write(f"- {f}")
 
 # --- TABLA Y GRÁFICO ---
 col_t, col_g = st.columns([1, 1])
 
 with col_t:
     if st.session_state.historial:
-        st.write("**Detalle de consumos:**")
+        st.write("**Detalle de tarjetas:**")
         df = pd.DataFrame(st.session_state.historial)
         st.dataframe(df[['tipo', 'monto']], use_container_width=True)
-        if st.button("🗑️ Reiniciar Mes"):
-            st.session_state.historial = []
-            st.session_state.ingresos = 0.0
-            st.session_state.ultimo_archivo = None
-            st.rerun()
+        
+    if st.button("🗑️ Reiniciar Mes"):
+        st.session_state.historial = []
+        st.session_state.ingresos = 0.0
+        st.session_state.archivos_procesados = []
+        st.rerun()
 
 with col_g:
     if st.session_state.ingresos > 0 or gastos_totales > 0:
