@@ -7,19 +7,26 @@ import re
 import json
 from streamlit_gsheets import GSheetsConnection
 
-# --- 1. CONFIGURACIÓN ---
+# --- 1. CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Gestión Facundo - Pro", layout="wide")
 
-# --- 2. CONEXIÓN A GOOGLE SHEETS ---
+# --- 2. TRUCO PARA LA LLAVE PRIVADA (SOLUCIONA EL ERROR PEM) ---
+# Este bloque corrige el formato de la llave antes de que la conexión la use
+if "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
+    pk = st.secrets["connections"]["gsheets"]["private_key"]
+    if "\\n" in pk:
+        st.secrets["connections"]["gsheets"]["private_key"] = pk.replace("\\n", "\n")
+
+# --- 3. CONEXIÓN A GOOGLE SHEETS ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def cargar_datos_gsheet():
     try:
-        # Intentamos leer la hoja
+        # ttl=0 para que siempre traiga los datos frescos del Excel
         df = conn.read(ttl=0)
         datos = {}
         if df is not None and not df.empty:
-            # Filtramos filas vacías por seguridad
+            # Eliminamos filas que no tengan Periodo (limpieza)
             df = df.dropna(subset=['Periodo'])
             for _, row in df.iterrows():
                 datos[str(row['Periodo'])] = {
@@ -28,7 +35,7 @@ def cargar_datos_gsheet():
                     "archivos": json.loads(row['Archivos_JSON'])
                 }
         return datos
-    except:
+    except Exception as e:
         return {}
 
 def guardar_datos_gsheet(datos_dict):
@@ -46,25 +53,18 @@ def guardar_datos_gsheet(datos_dict):
     
     df_nuevo = pd.DataFrame(filas)
     
-    # --- SOLUCIÓN AL ERROR DE ESCRITURA ---
-    # Probamos escribir en "Hoja 1" o "Sheet1" explícitamente
+    # Intentamos actualizar la hoja principal
     try:
-        conn.update(worksheet="Hoja 1", data=df_nuevo)
-    except:
-        try:
-            conn.update(worksheet="Sheet1", data=df_nuevo)
-        except Exception as e:
-            st.error(f"Error crítico de conexión: {e}")
-            # Si falla ambos, intentamos el método genérico
-            conn.update(data=df_nuevo)
-            
-    st.cache_data.clear()
+        conn.update(data=df_nuevo)
+        st.cache_data.clear()
+    except Exception as e:
+        st.error(f"Error al guardar en Google Sheets: {e}")
 
-# --- 3. INICIALIZACIÓN DE ESTADO ---
+# --- 4. INICIALIZACIÓN DE DATOS ---
 if 'datos_mensuales' not in st.session_state:
     st.session_state.datos_mensuales = cargar_datos_gsheet()
 
-# --- 4. SIDEBAR ---
+# --- 5. SIDEBAR (FILTROS) ---
 st.sidebar.title("📅 Periodo")
 meses = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
 mes_sel = st.sidebar.selectbox("Mes", meses, index=datetime.now().month - 1)
@@ -76,7 +76,7 @@ if id_periodo not in st.session_state.datos_mensuales:
 
 periodo_actual = st.session_state.datos_mensuales[id_periodo]
 
-# --- 5. PROCESAMIENTO PDF ---
+# --- 6. PROCESAMIENTO DE PDF ---
 def limpiar_monto(monto_str):
     monto_str = monto_str.replace("$", "").strip()
     if "." in monto_str and "," in monto_str:
@@ -110,7 +110,7 @@ def procesar_archivo_universal(pdf_file):
     except: pass
     return "DESCONOCIDO", 0
 
-# --- 6. INTERFAZ ---
+# --- 7. INTERFAZ VISUAL ---
 st.title(f"📊 Dashboard: {mes_sel} {anio_sel}")
 
 ingresos_totales = periodo_actual["ingresos"]
@@ -124,7 +124,8 @@ c3.metric("⚖️ DISPONIBLE", f"$ {balance:,.2f}")
 
 st.divider()
 
-archivo = st.file_uploader("Subí tus archivos aquí", type="pdf", key=f"uploader_{id_periodo}")
+# Subida de archivos
+archivo = st.file_uploader("Subí tus archivos aquí (PDF)", type="pdf", key=f"up_{id_periodo}")
 
 if archivo and archivo.name not in periodo_actual["archivos"]:
     tipo, monto = procesar_archivo_universal(archivo)
@@ -135,25 +136,34 @@ if archivo and archivo.name not in periodo_actual["archivos"]:
         periodo_actual["gastos"].append({"nombre": archivo.name, "tipo": tipo, "monto": monto})
         periodo_actual["archivos"].append(archivo.name)
     
-    # GUARDAR Y REFRESCAR
+    # GUARDAR CAMBIOS
     guardar_datos_gsheet(st.session_state.datos_mensuales)
+    st.success(f"Cargado: {tipo} por $ {monto}")
     st.rerun()
 
-# Detalle y Gráficos
-col_a, col_b = st.columns(2)
-with col_a:
+# --- 8. TABLAS Y GRÁFICOS ---
+col_izq, col_der = st.columns(2)
+
+with col_izq:
     if periodo_actual["gastos"]:
-        st.write("**Consumos del mes:**")
-        st.table(pd.DataFrame(periodo_actual["gastos"])[['tipo', 'monto']])
+        st.write("### Detalle de Gastos")
+        df_gastos = pd.DataFrame(periodo_actual["gastos"])
+        st.table(df_gastos[['tipo', 'monto']])
     
-    if st.button("🗑️ Reiniciar este mes"):
+    if st.button("🗑️ Reiniciar Datos del Mes"):
         st.session_state.datos_mensuales[id_periodo] = {"ingresos": 0.0, "gastos": [], "archivos": []}
         guardar_datos_gsheet(st.session_state.datos_mensuales)
         st.rerun()
 
-with col_b:
+with col_der:
     if ingresos_totales > 0 or gastos_totales > 0:
-        resumen = {g['tipo']: g['monto'] for g in periodo_actual["gastos"]}
-        if balance > 0: resumen['Disponible'] = balance
-        fig = px.pie(values=list(resumen.values()), names=list(resumen.keys()), hole=0.5)
+        st.write("### Distribución")
+        # Agrupamos gastos por tipo para el gráfico
+        resumen = {}
+        for g in periodo_actual["gastos"]:
+            resumen[g['tipo']] = resumen.get(g['tipo'], 0) + g['monto']
+        if balance > 0:
+            resumen['Disponible'] = balance
+        
+        fig = px.pie(values=list(resumen.values()), names=list(resumen.keys()), hole=0.5, template="plotly_dark")
         st.plotly_chart(fig, use_container_width=True)
