@@ -14,20 +14,28 @@ from google.oauth2.service_account import Credentials
 
 def conectar_google():
     try:
-        # Cargamos la llave y forzamos la limpieza de saltos de línea
+        # 1. Obtenemos la llave de los secrets
         pk = st.secrets["connections"]["gsheets"]["private_key"]
-        if "\\n" in pk:
-            pk = pk.replace("\\n", "\n")
         
+        # 2. LIMPIEZA AGRESIVA: Quitamos comillas accidentales y arreglamos saltos de línea
+        pk = pk.strip().strip('"').strip("'")
+        pk = pk.replace("\\n", "\n")
+        
+        # Aseguramos que empiece y termine correctamente
+        if not pk.startswith("-----BEGIN PRIVATE KEY-----"):
+            pk = "-----BEGIN PRIVATE KEY-----\n" + pk
+        if not pk.endswith("-----END PRIVATE KEY-----"):
+            pk = pk + "\n-----END PRIVATE KEY-----"
+
         info_dict = {
-            "type": st.secrets["connections"]["gsheets"]["type"],
+            "type": "service_account",
             "project_id": st.secrets["connections"]["gsheets"]["project_id"],
             "private_key": pk,
             "client_email": st.secrets["connections"]["gsheets"]["client_email"],
             "client_id": st.secrets["connections"]["gsheets"]["client_id"],
-            "auth_uri": st.secrets["connections"]["gsheets"]["auth_uri"],
-            "token_uri": st.secrets["connections"]["gsheets"]["token_uri"],
-            "auth_provider_x509_cert_url": st.secrets["connections"]["gsheets"]["auth_provider_x509_cert_url"],
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
             "client_x509_cert_url": st.secrets["connections"]["gsheets"]["client_x509_cert_url"],
         }
         
@@ -35,10 +43,11 @@ def conectar_google():
         creds = Credentials.from_service_account_info(info_dict, scopes=scopes)
         client = gspread.authorize(creds)
         
+        # Abrimos el Excel
         sheet = client.open_by_url(st.secrets["connections"]["gsheets"]["spreadsheet"])
         return sheet.get_worksheet(0)
     except Exception as e:
-        st.error(f"Error de conexión: {e}")
+        st.error(f"Falla de seguridad en la llave: {e}")
         return None
 # --- 2. FUNCIONES DE CARGA Y GUARDADO ---
 def cargar_datos():
