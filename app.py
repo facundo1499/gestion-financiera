@@ -14,16 +14,15 @@ from google.oauth2.service_account import Credentials
 
 def conectar_google():
     try:
-        # Extraemos la llave y le quitamos espacios o comillas accidentales
-        raw_key = st.secrets["connections"]["gsheets"]["private_key"]
-        
-        # CURACIÓN DE LLAVE: Esto elimina errores comunes de pegado
-        clean_key = raw_key.strip().replace("\\n", "\n")
+        # Cargamos la llave y forzamos la limpieza de saltos de línea
+        pk = st.secrets["connections"]["gsheets"]["private_key"]
+        if "\\n" in pk:
+            pk = pk.replace("\\n", "\n")
         
         info_dict = {
             "type": st.secrets["connections"]["gsheets"]["type"],
             "project_id": st.secrets["connections"]["gsheets"]["project_id"],
-            "private_key": clean_key,
+            "private_key": pk,
             "client_email": st.secrets["connections"]["gsheets"]["client_email"],
             "client_id": st.secrets["connections"]["gsheets"]["client_id"],
             "auth_uri": st.secrets["connections"]["gsheets"]["auth_uri"],
