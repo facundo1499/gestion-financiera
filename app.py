@@ -5,94 +5,83 @@ from datetime import datetime
 import pdfplumber
 import re
 
-# Configuración de la página
-st.set_page_config(page_title="Mi Gestión Financiera", layout="wide")
+# --- CONFIGURACIÓN Y ESTILOS ---
+st.set_page_config(page_title="Gestión ANSA - Facundo", layout="wide")
 
-# --- ESTILOS MODO OSCURO FORZADO ---
 st.markdown("""
     <style>
     .stApp { background-color: #0E1117; color: #FFFFFF; }
     [data-testid="stMetricValue"] { color: #FFFFFF !important; font-size: 32px !important; }
-    [data-testid="stMetricLabel"] { color: #A0A0A0 !important; }
     div[data-testid="metric-container"] {
-        background-color: #1A1C24;
-        border: 1px solid #30363D;
-        padding: 20px;
-        border-radius: 15px;
+        background-color: #1A1C24; border: 1px solid #30363D; padding: 20px; border-radius: 15px;
     }
-    h1, h2, h3 { color: #FFFFFF !important; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- FUNCIONES DE EXTRACCIÓN ---
-def extraer_monto_recibo(pdf_file):
-    with pdfplumber.open(pdf_file) as pdf:
-        texto_completo = ""
-        for pagina in pdf.pages:
-            texto_completo += pagina.extract_text()
-        
-        # Busca "Total Neto" seguido de números, puntos o comas
-        match = re.search(r"Total Neto[:\s]*([\d\.,]+)", texto_completo, re.IGNORECASE)
-        if match:
-            monto_str = match.group(1).replace(".", "").replace(",", ".")
-            return float(monto_str)
+# --- DETECTOR ESPECÍFICO PARA RECIBO ANSA ---
+def extraer_datos_ansa(pdf_file):
+    try:
+        with pdfplumber.open(pdf_file) as pdf:
+            texto = ""
+            for pagina in pdf.pages:
+                texto += pagina.extract_text() + "\n"
+            
+            if not texto.strip():
+                return "ERROR_IMAGEN"
+
+            # Buscamos el "Total Neto->" seguido del número
+            # El patrón busca la palabra, la flecha y el número con decimales
+            match = re.search(r"Total Neto->\s*([\d\.,]+)", texto)
+            
+            if match:
+                monto_str = match.group(1)
+                # Limpieza de formato argentino (puntos de mil y coma decimal)
+                # Si el número es 512512.14 lo detectamos directo
+                if "," in monto_str and "." in monto_str:
+                    monto_str = monto_str.replace(".", "").replace(",", ".")
+                return float(monto_str)
+    except Exception as e:
+        return None
     return None
 
-# --- ESTADO DE LA APP (Base de datos temporal) ---
-if 'ingresos' not in st.session_state:
-    st.session_state.ingresos = 0.0
-if 'gastos' not in st.session_state:
-    st.session_state.gastos = 0.0
+# --- LÓGICA DE ESTADO ---
+if 'ingresos' not in st.session_state: st.session_state.ingresos = 0.0
+if 'gastos' not in st.session_state: st.session_state.gastos = 0.0
 
-# --- SIDEBAR ---
-st.sidebar.title("📅 Filtros")
-meses = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
-mes_sel = st.sidebar.selectbox("Selecciona Mes", meses, index=datetime.now().month - 1)
-anio_sel = st.sidebar.selectbox("Selecciona Año", [2024, 2025, 2026])
+# --- INTERFAZ ---
+st.title("🏭 Panel de Control - ANSA S.A.")
+st.write(f"Usuario: **Coria Facundo Ariel**")
 
-# --- DASHBOARD ---
-st.title(f"📊 Resumen de {mes_sel} {anio_sel}")
-
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("💰 INGRESOS TOTALES", f"$ {st.session_state.ingresos:,.2f}")
-col2.metric("💳 GASTOS TARJETAS", f"$ {st.session_state.gastos:,.2f}")
-col3.metric("⚖️ BALANCE NETO", f"$ {(st.session_state.ingresos - st.session_state.gastos):,.2f}")
-col4.metric("🏦 AHORROS ACUM.", f"$ 0.00")
+c1, c2, c3 = st.columns(3)
+c1.metric("💰 NETO COBRADO", f"$ {st.session_state.ingresos:,.2f}")
+c2.metric("💳 GASTOS MACRO", f"$ {st.session_state.gastos:,.2f}")
+c3.metric("⚖️ DISPONIBLE", f"$ {(st.session_state.ingresos - st.session_state.gastos):,.2f}")
 
 st.divider()
 
-# --- CARGA DE ARCHIVOS ---
-st.header("📂 Importar Datos desde PDF")
-c1, c2 = st.columns(2)
+col_left, col_right = st.columns(2)
 
-with c1:
-    st.subheader("Recibo de Sueldo")
-    archivo_recibo = st.file_uploader("Sube tu recibo (Busca 'Total Neto')", type="pdf", key="recibo")
-    if archivo_recibo:
-        monto = extraer_monto_recibo(archivo_recibo)
-        if monto:
-            st.session_state.ingresos = monto
-            st.success(f"✅ ¡Sueldo detectado: $ {monto:,.2f}!")
+with col_left:
+    st.subheader("📁 Cargar Recibo de Sueldo")
+    archivo_rec = st.file_uploader("Subir PDF del Recibo", type="pdf", key="rec_ansa")
+    if archivo_rec:
+        res = extraer_datos_ansa(archivo_rec)
+        if res == "ERROR_IMAGEN":
+            st.error("⚠️ El PDF no tiene texto legible. Por favor, usa una App de escáner (OCR).")
+        elif res:
+            st.session_state.ingresos = res
+            st.success(f"✅ Recibo procesado: $ {res:,.2f}")
         else:
-            st.error("❌ No se encontró la frase 'Total Neto' en el PDF.")
+            st.warning("❓ No se encontró el 'Total Neto->'. Verifica que el PDF sea nítido.")
 
-with c2:
-    st.subheader("Resumen de Tarjeta")
-    archivo_tarjeta = st.file_uploader("Sube tu resumen de tarjeta", type="pdf", key="tarjeta")
-    # Aquí agregaremos la lógica específica de tu banco cuando me digas cuál es
-    if archivo_tarjeta:
-        st.info("Lector de tarjeta en desarrollo... (Necesito saber el nombre de tu banco)")
-
-# --- GRÁFICOS ---
-st.divider()
-if st.session_state.ingresos > 0 or st.session_state.gastos > 0:
-    fig = px.pie(
-        values=[st.session_state.gastos, max(0, st.session_state.ingresos - st.session_state.gastos)],
-        names=['Gastos', 'Disponible'],
-        hole=0.5,
-        template="plotly_dark",
-        color_discrete_sequence=['#FF4B4B', '#00CC96']
-    )
-    st.plotly_chart(fig, use_container_width=True)
-else:
-    st.info("Sube un archivo para ver los gráficos.")
+with col_right:
+    st.subheader("📊 Distribución")
+    if st.session_state.ingresos > 0:
+        fig = px.pie(
+            values=[st.session_state.gastos, max(0, st.session_state.ingresos - st.session_state.gastos)],
+            names=['Gastos', 'Sobrante'],
+            hole=0.5,
+            color_discrete_sequence=['#EF553B', '#00CC96'],
+            template="plotly_dark"
+        )
+        st.plotly_chart(fig, use_container_width=True)
