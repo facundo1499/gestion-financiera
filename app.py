@@ -40,27 +40,22 @@ def procesar_archivo_universal(pdf_file):
             if not texto.strip(): return "ERROR_IMAGEN", 0
             texto_upper = texto.upper()
 
-            # 1. BBVA 
             if "BBVA" in texto_upper:
                 match = re.search(r"SALDO ACTUAL\s*[\$]*\s*([\d\.,]+)", texto_upper)
                 if match: return "BBVA VISA", limpiar_monto(match.group(1))
 
-            # 2. RECIBO ANSA
             if "TOTAL NETO->" in texto_upper:
                 match = re.search(r"TOTAL NETO->\s*([\d\.,]+)", texto_upper)
                 if match: return "RECIBO ANSA", limpiar_monto(match.group(1))
 
-            # 3. BANCO MACRO
             if "DEBITAREMOS DE SU C.A." in texto_upper:
                 match = re.search(r"LA SUMA DE\s*\$\s*([\d\.,]+)", texto_upper)
                 if match: return "MACRO VISA", limpiar_monto(match.group(1))
 
-            # 4. MERCADO PAGO
             if "MERCADO PAGO" in texto_upper or "TOTAL A PAGAR" in texto_upper:
                 match = re.search(r"TOTAL A PAGAR\s*[\$]*\s*([\d\.,]+)", texto_upper)
                 if match: return "MERCADO PAGO", limpiar_monto(match.group(1))
 
-            # 5. TARJETA NARANJA
             if "NARANJA" in texto_upper:
                 match = re.search(r"TOTAL\s*\$\s*([\d\.,]+)", texto_upper)
                 if match: return "NARANJA", limpiar_monto(match.group(1))
@@ -71,6 +66,8 @@ def procesar_archivo_universal(pdf_file):
 # --- LÓGICA DE ESTADO ---
 if 'historial' not in st.session_state: st.session_state.historial = []
 if 'ingresos' not in st.session_state: st.session_state.ingresos = 0.0
+# Guardamos el nombre del último archivo para no procesarlo en bucle
+if 'ultimo_archivo' not in st.session_state: st.session_state.ultimo_archivo = None
 
 # --- SIDEBAR ---
 st.sidebar.title("📅 Periodo")
@@ -94,21 +91,22 @@ st.divider()
 st.subheader("📁 Cargar PDF (Recibo o Tarjeta)")
 archivo = st.file_uploader("Subí tu archivo aquí", type="pdf")
 
-if archivo:
+# --- PROCESAMIENTO CON AUTO-REFRESCO ---
+if archivo and archivo.name != st.session_state.ultimo_archivo:
     tipo, monto = procesar_archivo_universal(archivo)
     
-    if tipo == "ERROR_IMAGEN":
-        st.error("⚠️ PDF sin texto. Usá Adobe Scan.")
-    elif tipo == "RECIBO ANSA":
+    if tipo == "RECIBO ANSA":
         st.session_state.ingresos = monto
-        # --- AQUÍ ESTÁ EL CAMBIO ---
-        st.success(f"✅ Ingreso cargado: $ {monto:,.2f}")
-    elif tipo != "DESCONOCIDO":
-        if not any(d['nombre'] == archivo.name for d in st.session_state.historial):
-            st.session_state.historial.append({"nombre": archivo.name, "tipo": tipo, "monto": monto})
-            st.success(f"✅ {tipo} cargada correctamente.")
-    else:
-        st.warning("❓ No pude identificar el banco.")
+        st.session_state.ultimo_archivo = archivo.name
+        st.rerun() # Fuerza la actualización de los indicadores arriba
+    elif tipo != "DESCONOCIDO" and tipo != "ERROR_IMAGEN":
+        st.session_state.historial.append({"nombre": archivo.name, "tipo": tipo, "monto": monto})
+        st.session_state.ultimo_archivo = archivo.name
+        st.rerun() # Fuerza la actualización de los indicadores arriba
+
+# Mostrar mensajes de éxito persistentes
+if st.session_state.ultimo_archivo:
+    st.success(f"✅ Último archivo procesado: {st.session_state.ultimo_archivo}")
 
 # --- TABLA Y GRÁFICO ---
 col_t, col_g = st.columns([1, 1])
@@ -121,6 +119,7 @@ with col_t:
         if st.button("🗑️ Reiniciar Mes"):
             st.session_state.historial = []
             st.session_state.ingresos = 0.0
+            st.session_state.ultimo_archivo = None
             st.rerun()
 
 with col_g:
