@@ -6,7 +6,7 @@ import pdfplumber
 import re
 
 # --- CONFIGURACIÓN Y ESTILOS ---
-st.set_page_config(page_title="Gestión ANSA - Facundo", layout="wide")
+st.set_page_config(page_title="Gestión Facundo - Multi-Tarjetas", layout="wide")
 
 st.markdown("""
     <style>
@@ -15,97 +15,110 @@ st.markdown("""
     div[data-testid="metric-container"] {
         background-color: #1A1C24; border: 1px solid #30363D; padding: 20px; border-radius: 15px;
     }
-    h1, h2, h3 { color: #FFFFFF !important; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- FUNCIONES DE EXTRACCIÓN ---
-
-def extraer_datos_ansa(pdf_file):
+# --- DETECTOR MULTI-BANCO ACTUALIZADO ---
+def procesar_archivo_universal(pdf_file):
     try:
         with pdfplumber.open(pdf_file) as pdf:
-            texto = "".join([pagina.extract_text() for pagina in pdf.pages])
-            match = re.search(r"Total Neto->\s*([\d\.,]+)", texto)
-            if match:
-                return float(match.group(1).replace(".", "").replace(",", "."))
-    except: return None
-    return None
+            texto = "".join([p.extract_text() for p in pdf.pages])
+            if not texto.strip(): return "ERROR_IMAGEN", 0
 
-def extraer_datos_macro(pdf_file):
-    try:
-        with pdfplumber.open(pdf_file) as pdf:
-            texto = "".join([pagina.extract_text() for pagina in pdf.pages])
-            # Buscamos la frase que me pasaste del Macro
-            patron = r"DEBITAREMOS DE SU C\.A\..*?LA SUMA DE\s*\$\s*([\d\.,]+)"
-            match = re.search(patron, texto, re.IGNORECASE | re.DOTALL)
-            if match:
-                return float(match.group(1).replace(".", "").replace(",", "."))
-    except: return None
-    return None
+            # 1. RECIBO ANSA (Coria Facundo Ariel)
+            if "Total Neto->" in texto:
+                match = re.search(r"Total Neto->\s*([\d\.,]+)", texto)
+                if match: return "RECIBO ANSA", float(match.group(1).replace(".", "").replace(",", "."))
 
-# --- LÓGICA DE ESTADO (MEMORIA DE LA APP) ---
+            # 2. BANCO MACRO
+            if "DEBITAREMOS DE SU C.A." in texto:
+                match = re.search(r"LA SUMA DE\s*\$\s*([\d\.,]+)", texto)
+                if match: return "MACRO VISA", float(match.group(1).replace(".", "").replace(",", "."))
+
+            # 3. MERCADO PAGO
+            if "Mercado Pago" in texto or "Total a pagar en pesos" in texto:
+                match = re.search(r"Total a pagar\s*[\$]*\s*([\d\.,]+)", texto, re.I)
+                if match: return "MERCADO PAGO", float(match.group(1).replace(".", "").replace(",", "."))
+
+            # 4. TARJETA NARANJA (Frase: Total)
+            if "NARANJA" in texto.upper():
+                # Buscamos la palabra Total seguida de pesos, evitando subtotales
+                match = re.search(r"Total\s*\$\s*([\d\.,]+)", texto, re.I)
+                if match: return "NARANJA", float(match.group(1).replace(".", "").replace(",", "."))
+
+            # 5. BBVA (Frase: SALDO ACTUAL)
+            if "BBVA" in texto:
+                match = re.search(r"SALDO ACTUAL\s*[\$]*\s*([\d\.,]+)", texto, re.I)
+                if match: return "BBVA VISA", float(match.group(1).replace(".", "").replace(",", "."))
+
+    except: return None, 0
+    return "DESCONOCIDO", 0
+
+# --- LÓGICA DE ESTADO ---
+if 'historial' not in st.session_state: st.session_state.historial = []
 if 'ingresos' not in st.session_state: st.session_state.ingresos = 0.0
-if 'gastos_tarjetas' not in st.session_state: st.session_state.gastos_tarjetas = {}
 
 # --- SIDEBAR ---
-st.sidebar.title("📅 Periodo de Consulta")
-meses = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
-mes_sel = st.sidebar.selectbox("Selecciona Mes", meses, index=datetime.now().month - 1)
-anio_sel = st.sidebar.selectbox("Selecciona Año", [2024, 2025, 2026], index=2)
+st.sidebar.title("📅 Filtros")
+mes_sel = st.sidebar.selectbox("Mes", ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"], index=datetime.now().month - 1)
+anio_sel = st.sidebar.selectbox("Año", [2024, 2025, 2026], index=2)
 
-# --- CÁLCULOS TOTALES ---
-total_gastos = sum(st.session_state.gastos_tarjetas.values())
-balance_neto = st.session_state.ingresos - total_gastos
+# --- CÁLCULOS ---
+gastos_totales = sum([item['monto'] for item in st.session_state.historial if "RECIBO" not in item['tipo']])
+balance = st.session_state.ingresos - gastos_totales
 
-# --- INTERFAZ PRINCIPAL ---
-st.title(f"🏭 Panel de Control: {mes_sel} {anio_sel}")
+# --- INTERFAZ ---
+st.title(f"📊 Dashboard: {mes_sel} {anio_sel}")
 
 c1, c2, c3 = st.columns(3)
-c1.metric("💰 INGRESOS TOTALES", f"$ {st.session_state.ingresos:,.2f}")
-c2.metric("💳 GASTOS TARJETAS", f"$ {total_gastos:,.2f}")
-c3.metric("⚖️ BALANCE NETO", f"$ {balance_neto:,.2f}")
+c1.metric("💰 INGRESOS", f"$ {st.session_state.ingresos:,.2f}")
+c2.metric("💳 GASTOS TARJETAS", f"$ {gastos_totales:,.2f}")
+c3.metric("⚖️ DISPONIBLE", f"$ {balance:,.2f}")
 
 st.divider()
 
-col_left, col_right = st.columns(2)
+# --- CARGA UNIVERSAL ---
+st.subheader("📁 Cargar PDF (Recibo o Tarjeta)")
+archivo = st.file_uploader("Subí tu archivo de ANSA, Macro, MP, Naranja o BBVA", type="pdf")
 
-with col_left:
-    st.subheader("📁 Carga de Documentos")
+if archivo:
+    tipo, monto = procesar_archivo_universal(archivo)
     
-    # 1. CARGA DE SUELDO
-    archivo_rec = st.file_uploader("Subir Recibo ANSA", type="pdf", key="rec_ansa")
-    if archivo_rec:
-        res = extraer_datos_ansa(archivo_rec)
-        if res:
-            st.session_state.ingresos = res
-            st.success("✅ Sueldo actualizado.")
+    if tipo == "ERROR_IMAGEN":
+        st.error("⚠️ Recordá pasar la foto por Adobe Scan antes de subirla.")
+    elif tipo == "RECIBO ANSA":
+        st.session_state.ingresos = monto
+        st.success(f"✅ Ingreso cargado: $ {monto:,.2f}")
+    elif tipo != "DESCONOCIDO":
+        if not any(d['nombre'] == archivo.name for d in st.session_state.historial):
+            st.session_state.historial.append({"nombre": archivo.name, "tipo": tipo, "monto": monto})
+            st.success(f"✅ {tipo} cargada: $ {monto:,.2f}")
+    else:
+        st.warning("❓ No pude detectar el monto automáticamente. Revisá si el PDF es el original.")
 
-    st.markdown("---")
-    st.write("**Resúmenes de Tarjetas:**")
-    
-    # 2. CARGA DE TARJETAS (Múltiples slots)
-    for i in range(1, 4): # Permite cargar hasta 3 tarjetas
-        archivo_tar = st.file_uploader(f"Subir Tarjeta {i} (Macro/Otros)", type="pdf", key=f"tarjeta_{i}")
-        if archivo_tar:
-            monto_tar = extraer_datos_macro(archivo_tar)
-            if monto_tar:
-                st.session_state.gastos_tarjetas[f"tarjeta_{i}"] = monto_tar
-                st.info(f"Tarjeta {i}: $ {monto_tar:,.2f} detectados.")
+# --- TABLA Y GRÁFICO ---
+col_t, col_g = st.columns([1, 1])
 
-with col_right:
-    st.subheader("📊 Distribución del Presupuesto")
-    if st.session_state.ingresos > 0 or total_gastos > 0:
-        # Preparamos datos para el gráfico
-        nombres = list(st.session_state.gastos_tarjetas.keys()) + ['Disponible']
-        valores = list(st.session_state.gastos_tarjetas.values()) + [max(0, balance_neto)]
+with col_t:
+    st.write("**Detalle de consumos:**")
+    if st.session_state.historial:
+        df = pd.DataFrame(st.session_state.historial)
+        st.dataframe(df[['tipo', 'monto']], use_container_width=True)
+        if st.button("🗑️ Reiniciar Mes"):
+            st.session_state.historial = []
+            st.session_state.ingresos = 0.0
+            st.rerun()
+
+with col_g:
+    if st.session_state.ingresos > 0 or gastos_totales > 0:
+        datos_grafico = {item['tipo']: item['monto'] for item in st.session_state.historial}
+        if balance > 0: datos_grafico['Disponible'] = balance
         
         fig = px.pie(
-            values=valores,
-            names=nombres,
+            values=list(datos_grafico.values()),
+            names=list(datos_grafico.keys()),
             hole=0.6,
             template="plotly_dark",
-            color_discrete_sequence=px.colors.qualitative.Pastel
+            color_discrete_sequence=px.colors.qualitative.Safe
         )
         st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Carga archivos para ver el análisis.")
