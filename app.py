@@ -18,38 +18,39 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- DETECTOR MULTI-BANCO ACTUALIZADO ---
+# --- DETECTOR MULTI-BANCO MEJORADO ---
 def procesar_archivo_universal(pdf_file):
     try:
         with pdfplumber.open(pdf_file) as pdf:
             texto = "".join([p.extract_text() for p in pdf.pages])
             if not texto.strip(): return "ERROR_IMAGEN", 0
 
-            # 1. RECIBO ANSA (Coria Facundo Ariel)
-            if "Total Neto->" in texto:
-                match = re.search(r"Total Neto->\s*([\d\.,]+)", texto)
+            texto_upper = texto.upper()
+
+            # 1. BBVA (Lo ponemos primero para evitar que otros lo pisen)
+            if "BBVA" in texto_upper:
+                match = re.search(r"SALDO ACTUAL\s*[\$]*\s*([\d\.,]+)", texto_upper)
+                if match: return "BBVA VISA", float(match.group(1).replace(".", "").replace(",", "."))
+
+            # 2. RECIBO ANSA
+            if "TOTAL NETO->" in texto_upper:
+                match = re.search(r"TOTAL NETO->\s*([\d\.,]+)", texto_upper)
                 if match: return "RECIBO ANSA", float(match.group(1).replace(".", "").replace(",", "."))
 
-            # 2. BANCO MACRO
-            if "DEBITAREMOS DE SU C.A." in texto:
-                match = re.search(r"LA SUMA DE\s*\$\s*([\d\.,]+)", texto)
+            # 3. BANCO MACRO
+            if "DEBITAREMOS DE SU C.A." in texto_upper:
+                match = re.search(r"LA SUMA DE\s*\$\s*([\d\.,]+)", texto_upper)
                 if match: return "MACRO VISA", float(match.group(1).replace(".", "").replace(",", "."))
 
-            # 3. MERCADO PAGO
-            if "Mercado Pago" in texto or "Total a pagar en pesos" in texto:
-                match = re.search(r"Total a pagar\s*[\$]*\s*([\d\.,]+)", texto, re.I)
+            # 4. MERCADO PAGO
+            if "MERCADO PAGO" in texto_upper:
+                match = re.search(r"TOTAL A PAGAR\s*[\$]*\s*([\d\.,]+)", texto_upper)
                 if match: return "MERCADO PAGO", float(match.group(1).replace(".", "").replace(",", "."))
 
-            # 4. TARJETA NARANJA (Frase: Total)
-            if "NARANJA" in texto.upper():
-                # Buscamos la palabra Total seguida de pesos, evitando subtotales
-                match = re.search(r"Total\s*\$\s*([\d\.,]+)", texto, re.I)
+            # 5. TARJETA NARANJA
+            if "NARANJA" in texto_upper:
+                match = re.search(r"TOTAL\s*\$\s*([\d\.,]+)", texto_upper)
                 if match: return "NARANJA", float(match.group(1).replace(".", "").replace(",", "."))
-
-            # 5. BBVA (Frase: SALDO ACTUAL)
-            if "BBVA" in texto:
-                match = re.search(r"SALDO ACTUAL\s*[\$]*\s*([\d\.,]+)", texto, re.I)
-                if match: return "BBVA VISA", float(match.group(1).replace(".", "").replace(",", "."))
 
     except: return None, 0
     return "DESCONOCIDO", 0
@@ -77,24 +78,24 @@ c3.metric("⚖️ DISPONIBLE", f"$ {balance:,.2f}")
 
 st.divider()
 
-# --- CARGA UNIVERSAL ---
 st.subheader("📁 Cargar PDF (Recibo o Tarjeta)")
-archivo = st.file_uploader("Subí tu archivo de ANSA, Macro, MP, Naranja o BBVA", type="pdf")
+archivo = st.file_uploader("Subí tu archivo aquí", type="pdf")
 
 if archivo:
     tipo, monto = procesar_archivo_universal(archivo)
     
     if tipo == "ERROR_IMAGEN":
-        st.error("⚠️ Recordá pasar la foto por Adobe Scan antes de subirla.")
+        st.error("⚠️ PDF sin texto. Usá Adobe Scan.")
     elif tipo == "RECIBO ANSA":
         st.session_state.ingresos = monto
         st.success(f"✅ Ingreso cargado: $ {monto:,.2f}")
     elif tipo != "DESCONOCIDO":
+        # Evitar duplicar el mismo archivo físico
         if not any(d['nombre'] == archivo.name for d in st.session_state.historial):
             st.session_state.historial.append({"nombre": archivo.name, "tipo": tipo, "monto": monto})
-            st.success(f"✅ {tipo} cargada: $ {monto:,.2f}")
+            st.success(f"✅ {tipo} detectada: $ {monto:,.2f}")
     else:
-        st.warning("❓ No pude detectar el monto automáticamente. Revisá si el PDF es el original.")
+        st.warning("❓ No pude identificar el banco automáticamente.")
 
 # --- TABLA Y GRÁFICO ---
 col_t, col_g = st.columns([1, 1])
@@ -118,7 +119,6 @@ with col_g:
             values=list(datos_grafico.values()),
             names=list(datos_grafico.keys()),
             hole=0.6,
-            template="plotly_dark",
-            color_discrete_sequence=px.colors.qualitative.Safe
+            template="plotly_dark"
         )
         st.plotly_chart(fig, use_container_width=True)
