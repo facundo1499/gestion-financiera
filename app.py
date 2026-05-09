@@ -61,8 +61,14 @@ def guardar_datos_gsheet(datos_dict):
         st.error(f"Error al guardar en Google Sheets: {e}")
 
 # --- 4. INICIALIZACIÓN DE DATOS ---
-if 'datos_mensuales' not in st.session_state:
-    st.session_state.datos_mensuales = cargar_datos_gsheet()
+# Usamos un botón manual para "Refrescar" si el automático falla
+if 'datos_mensuales' not in st.session_state or st.sidebar.button("🔄 Forzar Sincronización"):
+    with st.spinner("Buscando datos en la nube..."):
+        st.session_state.datos_mensuales = cargar_datos_gsheet()
+        if not st.session_state.datos_mensuales:
+            st.sidebar.warning("No se encontraron datos guardados.")
+        else:
+            st.sidebar.success("Datos recuperados con éxito.")
 
 # --- 5. SIDEBAR (FILTROS) ---
 st.sidebar.title("📅 Periodo")
