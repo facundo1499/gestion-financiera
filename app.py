@@ -14,23 +14,22 @@ from google.oauth2.service_account import Credentials
 
 def conectar_google():
     try:
-        # 1. Obtenemos la llave de los secrets
-        pk = st.secrets["connections"]["gsheets"]["private_key"]
+        # Extraemos la llave de los secrets
+        llave_cruda = st.secrets["connections"]["gsheets"]["private_key"]
         
-        # 2. LIMPIEZA AGRESIVA: Quitamos comillas accidentales y arreglamos saltos de línea
-        pk = pk.strip().strip('"').strip("'")
-        pk = pk.replace("\\n", "\n")
+        # LIMPIEZA AUTOMÁTICA: 
+        # 1. Quitamos espacios vacíos al inicio y final
+        # 2. Convertimos los saltos de línea literales (\n) en saltos reales
+        llave_limpia = llave_cruda.strip().replace("\\n", "\n")
         
-        # Aseguramos que empiece y termine correctamente
-        if not pk.startswith("-----BEGIN PRIVATE KEY-----"):
-            pk = "-----BEGIN PRIVATE KEY-----\n" + pk
-        if not pk.endswith("-----END PRIVATE KEY-----"):
-            pk = pk + "\n-----END PRIVATE KEY-----"
+        # Si por alguna razón faltan los encabezados, los agregamos
+        if "-----BEGIN PRIVATE KEY-----" not in llave_limpia:
+            llave_limpia = "-----BEGIN PRIVATE KEY-----\n" + llave_limpia + "\n-----END PRIVATE KEY-----"
 
         info_dict = {
             "type": "service_account",
             "project_id": st.secrets["connections"]["gsheets"]["project_id"],
-            "private_key": pk,
+            "private_key": llave_limpia,
             "client_email": st.secrets["connections"]["gsheets"]["client_email"],
             "client_id": st.secrets["connections"]["gsheets"]["client_id"],
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
@@ -43,11 +42,11 @@ def conectar_google():
         creds = Credentials.from_service_account_info(info_dict, scopes=scopes)
         client = gspread.authorize(creds)
         
-        # Abrimos el Excel
+        # Conexión directa por URL
         sheet = client.open_by_url(st.secrets["connections"]["gsheets"]["spreadsheet"])
         return sheet.get_worksheet(0)
     except Exception as e:
-        st.error(f"Falla de seguridad en la llave: {e}")
+        st.error(f"Error de conexión (Llave): {e}")
         return None
 # --- 2. FUNCIONES DE CARGA Y GUARDADO ---
 def cargar_datos():
