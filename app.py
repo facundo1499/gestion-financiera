@@ -97,23 +97,28 @@ if id_periodo not in st.session_state.datos_mensuales:
 
 periodo_actual = st.session_state.datos_mensuales[id_periodo]
 
-# --- 5. LÓGICA DE PROCESAMIENTO (TU CÓDIGO DE PDF) ---
+# --- 5. LÓGICA DE PROCESAMIENTO ---
 st.title(f"📊 Gestión Financiera: {id_periodo}")
 
 archivo_subido = st.file_uploader("Subir comprobante (PDF)", type=["pdf"])
 
 if archivo_subido:
-    # --- AQUÍ VA TU LÓGICA DE EXTRACCIÓN DE PDF ---
-    # Simulamos una extracción exitosa:
-    if st.button("Procesar Archivo"):
-        # Ejemplo:
-        nuevo_gasto = {"item": archivo_subido.name, "monto": 1500.0}
-        periodo_actual["gastos"].append(nuevo_gasto)
-        
-        # Guardar cambios
-        guardar_datos(st.session_state.datos_mensuales)
-        st.rerun()
-
+    # EL BOTÓN AHORA ESTÁ AFUERA PARA QUE SEA VISIBLE
+    if st.button("🚀 Procesar Datos y Guardar"):
+        with st.spinner("Extrayendo información..."):
+            # --- AQUÍ VA TU LÓGICA REAL DE EXTRACCIÓN ---
+            # Por ahora, simulamos que encontró un gasto para probar la conexión
+            nombre_archivo = archivo_subido.name
+            nuevo_gasto = {"item": nombre_archivo, "monto": 1000.0} # Monto de prueba
+            
+            # Actualizamos el estado
+            st.session_state.datos_mensuales[id_periodo]["gastos"].append(nuevo_gasto)
+            
+            # Guardamos en Google Sheets
+            guardar_datos(st.session_state.datos_mensuales)
+            
+            st.success(f"Archivo {nombre_archivo} procesado con éxito.")
+            st.rerun()
 # --- 6. DASHBOARD ---
 col1, col2 = st.columns(2)
 with col1:
