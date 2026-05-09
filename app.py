@@ -2,38 +2,47 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from datetime import datetime
+import pdfplumber
+import re
 
 # Configuración de la página
 st.set_page_config(page_title="Mi Gestión Financiera", layout="wide")
 
-# --- PARCHE PARA MODO OSCURO Y COLORES ---
+# --- ESTILOS MODO OSCURO FORZADO ---
 st.markdown("""
     <style>
-    /* Forzar fondo oscuro y texto claro */
     .stApp { background-color: #0E1117; color: #FFFFFF; }
-    
-    /* Estilo para las tarjetas de números */
     [data-testid="stMetricValue"] { color: #FFFFFF !important; font-size: 32px !important; }
     [data-testid="stMetricLabel"] { color: #A0A0A0 !important; }
-    
-    /* Fondo de las tarjetas */
     div[data-testid="metric-container"] {
         background-color: #1A1C24;
         border: 1px solid #30363D;
         padding: 20px;
         border-radius: 15px;
     }
-    
-    /* Ajustar títulos */
     h1, h2, h3 { color: #FFFFFF !important; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- DATOS (Simulados hasta cargar PDF) ---
-ingresos_total = 550000.0
-gastos_tarjeta = 125000.0
-balance = ingresos_total - gastos_tarjeta
-ahorros_meta = 85000.0
+# --- FUNCIONES DE EXTRACCIÓN ---
+def extraer_monto_recibo(pdf_file):
+    with pdfplumber.open(pdf_file) as pdf:
+        texto_completo = ""
+        for pagina in pdf.pages:
+            texto_completo += pagina.extract_text()
+        
+        # Busca "Total Neto" seguido de números, puntos o comas
+        match = re.search(r"Total Neto[:\s]*([\d\.,]+)", texto_completo, re.IGNORECASE)
+        if match:
+            monto_str = match.group(1).replace(".", "").replace(",", ".")
+            return float(monto_str)
+    return None
+
+# --- ESTADO DE LA APP (Base de datos temporal) ---
+if 'ingresos' not in st.session_state:
+    st.session_state.ingresos = 0.0
+if 'gastos' not in st.session_state:
+    st.session_state.gastos = 0.0
 
 # --- SIDEBAR ---
 st.sidebar.title("📅 Filtros")
@@ -41,37 +50,49 @@ meses = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto
 mes_sel = st.sidebar.selectbox("Selecciona Mes", meses, index=datetime.now().month - 1)
 anio_sel = st.sidebar.selectbox("Selecciona Año", [2024, 2025, 2026])
 
-# --- TITULO ---
+# --- DASHBOARD ---
 st.title(f"📊 Resumen de {mes_sel} {anio_sel}")
 
-# --- MÉTRICAS ---
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("💰 INGRESOS TOTALES", f"$ {ingresos_total:,.2f}")
-col2.metric("💳 GASTOS TARJETAS", f"$ {gastos_tarjeta:,.2f}")
-col3.metric("⚖️ BALANCE NETO", f"$ {balance:,.2f}")
-col4.metric("🏦 AHORROS ACUM.", f"$ {ahorros_meta:,.2f}")
+col1.metric("💰 INGRESOS TOTALES", f"$ {st.session_state.ingresos:,.2f}")
+col2.metric("💳 GASTOS TARJETAS", f"$ {st.session_state.gastos:,.2f}")
+col3.metric("⚖️ BALANCE NETO", f"$ {(st.session_state.ingresos - st.session_state.gastos):,.2f}")
+col4.metric("🏦 AHORROS ACUM.", f"$ 0.00")
 
-st.markdown("<br>", unsafe_allow_html=True)
+st.divider()
 
-# --- GRÁFICOS (Con tema oscuro) ---
+# --- CARGA DE ARCHIVOS ---
+st.header("📂 Importar Datos desde PDF")
 c1, c2 = st.columns(2)
 
 with c1:
-    st.subheader("Evolución Mensual")
-    df_graf = pd.DataFrame({
-        'Mes': ['Ene', 'Feb', 'Mar', 'Abr'],
-        'Ingresos': [500000, 520000, 510000, 550000],
-        'Gastos': [120000, 150000, 130000, 125000]
-    })
-    fig = px.line(df_graf, x='Mes', y=['Ingresos', 'Gastos'], markers=True, template="plotly_dark")
-    st.plotly_chart(fig, use_container_width=True)
+    st.subheader("Recibo de Sueldo")
+    archivo_recibo = st.file_uploader("Sube tu recibo (Busca 'Total Neto')", type="pdf", key="recibo")
+    if archivo_recibo:
+        monto = extraer_monto_recibo(archivo_recibo)
+        if monto:
+            st.session_state.ingresos = monto
+            st.success(f"✅ ¡Sueldo detectado: $ {monto:,.2f}!")
+        else:
+            st.error("❌ No se encontró la frase 'Total Neto' en el PDF.")
 
 with c2:
-    st.subheader("Distribución actual")
-    fig2 = px.pie(values=[gastos_tarjeta, balance], names=['Gastos', 'Disponible'], hole=0.4, template="plotly_dark")
-    st.plotly_chart(fig2, use_container_width=True)
+    st.subheader("Resumen de Tarjeta")
+    archivo_tarjeta = st.file_uploader("Sube tu resumen de tarjeta", type="pdf", key="tarjeta")
+    # Aquí agregaremos la lógica específica de tu banco cuando me digas cuál es
+    if archivo_tarjeta:
+        st.info("Lector de tarjeta en desarrollo... (Necesito saber el nombre de tu banco)")
 
-# --- CARGA ---
+# --- GRÁFICOS ---
 st.divider()
-st.header("📂 Cargar Documentos")
-archivo = st.file_uploader("Sube tu PDF aquí", type="pdf")
+if st.session_state.ingresos > 0 or st.session_state.gastos > 0:
+    fig = px.pie(
+        values=[st.session_state.gastos, max(0, st.session_state.ingresos - st.session_state.gastos)],
+        names=['Gastos', 'Disponible'],
+        hole=0.5,
+        template="plotly_dark",
+        color_discrete_sequence=['#FF4B4B', '#00CC96']
+    )
+    st.plotly_chart(fig, use_container_width=True)
+else:
+    st.info("Sube un archivo para ver los gráficos.")
