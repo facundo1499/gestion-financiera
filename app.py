@@ -15,33 +15,43 @@ st.markdown("""
     div[data-testid="metric-container"] {
         background-color: #1A1C24; border: 1px solid #30363D; padding: 20px; border-radius: 15px;
     }
+    h1, h2, h3 { color: #FFFFFF !important; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- DETECTOR ESPECÍFICO PARA RECIBO ANSA ---
+# --- FUNCIONES DE EXTRACCIÓN ---
+
+# 1. Lector ANSA
 def extraer_datos_ansa(pdf_file):
     try:
         with pdfplumber.open(pdf_file) as pdf:
             texto = ""
             for pagina in pdf.pages:
                 texto += pagina.extract_text() + "\n"
-            
-            if not texto.strip():
-                return "ERROR_IMAGEN"
-
-            # Buscamos el "Total Neto->" seguido del número
-            # El patrón busca la palabra, la flecha y el número con decimales
+            if not texto.strip(): return "ERROR_IMAGEN"
             match = re.search(r"Total Neto->\s*([\d\.,]+)", texto)
-            
             if match:
-                monto_str = match.group(1)
-                # Limpieza de formato argentino (puntos de mil y coma decimal)
-                # Si el número es 512512.14 lo detectamos directo
-                if "," in monto_str and "." in monto_str:
-                    monto_str = monto_str.replace(".", "").replace(",", ".")
+                monto_str = match.group(1).replace(".", "").replace(",", ".")
                 return float(monto_str)
-    except Exception as e:
-        return None
+    except: return None
+    return None
+
+# 2. Lector Banco Macro (Tarjeta)
+def extraer_datos_macro(pdf_file):
+    try:
+        with pdfplumber.open(pdf_file) as pdf:
+            texto = ""
+            for pagina in pdf.pages:
+                texto += pagina.extract_text() + "\n"
+            
+            # Buscamos frases típicas de resúmenes de tarjeta
+            patrones = [r"SALDO AL CIERRE\s*[\$]*\s*([\d\.,]+)", r"TOTAL A PAGAR\s*[\$]*\s*([\d\.,]+)"]
+            for p in patrones:
+                match = re.search(p, texto, re.IGNORECASE)
+                if match:
+                    monto_str = match.group(1).replace(".", "").replace(",", ".")
+                    return float(monto_str)
+    except: return None
     return None
 
 # --- LÓGICA DE ESTADO ---
@@ -62,26 +72,38 @@ st.divider()
 col_left, col_right = st.columns(2)
 
 with col_left:
-    st.subheader("📁 Cargar Recibo de Sueldo")
-    archivo_rec = st.file_uploader("Subir PDF del Recibo", type="pdf", key="rec_ansa")
+    st.subheader("📁 Cargar Documentos")
+    
+    # Cargador de Recibo
+    archivo_rec = st.file_uploader("Subir Recibo ANSA", type="pdf", key="rec_ansa")
     if archivo_rec:
         res = extraer_datos_ansa(archivo_rec)
         if res == "ERROR_IMAGEN":
-            st.error("⚠️ El PDF no tiene texto legible. Por favor, usa una App de escáner (OCR).")
+            st.error("⚠️ El PDF del recibo es una foto sin OCR. Usa Adobe Scan.")
         elif res:
             st.session_state.ingresos = res
-            st.success(f"✅ Recibo procesado: $ {res:,.2f}")
+            st.success(f"✅ Sueldo actualizado: $ {res:,.2f}")
+
+    # Cargador de Tarjeta (RESTAURADO)
+    archivo_tar = st.file_uploader("Subir Resumen Banco Macro", type="pdf", key="tar_macro")
+    if archivo_tar:
+        res_tar = extraer_datos_macro(archivo_tar)
+        if res_tar:
+            st.session_state.gastos = res_tar
+            st.success(f"✅ Gastos de tarjeta cargados: $ {res_tar:,.2f}")
         else:
-            st.warning("❓ No se encontró el 'Total Neto->'. Verifica que el PDF sea nítido.")
+            st.warning("❓ No se detectó el 'Total a Pagar'. ¿Es el PDF original del banco?")
 
 with col_right:
-    st.subheader("📊 Distribución")
-    if st.session_state.ingresos > 0:
+    st.subheader("📊 Gráfico de Balance")
+    if st.session_state.ingresos > 0 or st.session_state.gastos > 0:
         fig = px.pie(
             values=[st.session_state.gastos, max(0, st.session_state.ingresos - st.session_state.gastos)],
-            names=['Gastos', 'Sobrante'],
+            names=['Gastos Tarjeta', 'Dinero Disponible'],
             hole=0.5,
-            color_discrete_sequence=['#EF553B', '#00CC96'],
+            color_discrete_sequence=['#FF4B4B', '#00CC96'],
             template="plotly_dark"
         )
         st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Sube tus archivos para ver el gráfico de distribución.")
