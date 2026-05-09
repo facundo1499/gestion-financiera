@@ -4,9 +4,11 @@ import plotly.express as px
 from datetime import datetime
 import pdfplumber
 import re
+import json
+from streamlit_gsheets import GSheetsConnection
 
-# --- CONFIGURACIÓN Y ESTILOS ---
-st.set_page_config(page_title="Gestión Facundo - Multi-Tarjetas", layout="wide")
+# --- 1. CONFIGURACIÓN DE PÁGINA ---
+st.set_page_config(page_title="Gestión Facundo - Total Seguro", layout="wide")
 
 st.markdown("""
     <style>
@@ -18,7 +20,63 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- FUNCIONES DE PROCESAMIENTO ---
+# --- 2. CONEXIÓN Y FUNCIONES DE DATOS ---
+conn = st.connection("gsheets", type=GSheetsConnection)
+
+def cargar_datos_gsheet():
+    try:
+        # Leemos la planilla. ttl=0 evita que Streamlit use datos viejos guardados en cache
+        df = conn.read(ttl=0)
+        datos = {}
+        if not df.empty:
+            for _, row in df.iterrows():
+                # Reconvertimos los textos JSON a listas/diccionarios de Python
+                datos[str(row['Periodo'])] = {
+                    "ingresos": float(row['Ingresos']),
+                    "gastos": json.loads(row['Gastos_JSON']),
+                    "archivos": json.loads(row['Archivos_JSON'])
+                }
+        return datos
+    except Exception as e:
+        # Si la planilla está vacía o no existe, devolvemos un dict vacío
+        return {}
+
+def guardar_datos_gsheet(datos_dict):
+    if not datos_dict:
+        return
+    
+    filas = []
+    for periodo, info in datos_dict.items():
+        filas.append({
+            "Periodo": periodo,
+            "Ingresos": info["ingresos"],
+            "Gastos_JSON": json.dumps(info["gastos"]),
+            "Archivos_JSON": json.dumps(info["archivos"])
+        })
+    
+    df_nuevo = pd.DataFrame(filas)
+    # Actualizamos la planilla completa
+    conn.update(data=df_nuevo)
+    # Limpiamos el cache para que la próxima lectura sea inmediata
+    st.cache_data.clear()
+
+# --- 3. INICIALIZACIÓN ---
+if 'datos_mensuales' not in st.session_state:
+    st.session_state.datos_mensuales = cargar_datos_gsheet()
+
+# --- 4. SIDEBAR ---
+st.sidebar.title("📅 Periodo")
+mes_sel = st.sidebar.selectbox("Mes", ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"], index=datetime.now().month - 1)
+anio_sel = st.sidebar.selectbox("Año", [2024, 2025, 2026], index=2)
+id_periodo = f"{mes_sel}-{anio_sel}"
+
+# Si el mes seleccionado no existe en nuestros datos, lo creamos
+if id_periodo not in st.session_state.datos_mensuales:
+    st.session_state.datos_mensuales[id_periodo] = {"ingresos": 0.0, "gastos": [], "archivos": []}
+
+periodo_actual = st.session_state.datos_mensuales[id_periodo]
+
+# --- 5. FUNCIONES PDF ---
 def limpiar_monto(monto_str):
     monto_str = monto_str.replace("$", "").strip()
     if "." in monto_str and "," in monto_str:
@@ -33,104 +91,84 @@ def limpiar_monto(monto_str):
 def procesar_archivo_universal(pdf_file):
     try:
         with pdfplumber.open(pdf_file) as pdf:
-            texto = "".join([p.extract_text() for p in pdf.pages])
-            if not texto.strip(): return "ERROR_IMAGEN", 0
-            texto_upper = texto.upper()
-
-            if "BBVA" in texto_upper:
-                match = re.search(r"SALDO ACTUAL\s*[\$]*\s*([\d\.,]+)", texto_upper)
-                if match: return "BBVA VISA", limpiar_monto(match.group(1))
-            if "TOTAL NETO->" in texto_upper:
-                match = re.search(r"TOTAL NETO->\s*([\d\.,]+)", texto_upper)
-                if match: return "RECIBO ANSA", limpiar_monto(match.group(1))
-            if "DEBITAREMOS DE SU C.A." in texto_upper:
-                match = re.search(r"LA SUMA DE\s*\$\s*([\d\.,]+)", texto_upper)
-                if match: return "MACRO VISA", limpiar_monto(match.group(1))
-            if "MERCADO PAGO" in texto_upper or "TOTAL A PAGAR" in texto_upper:
-                match = re.search(r"TOTAL A PAGAR\s*[\$]*\s*([\d\.,]+)", texto_upper)
-                if match: return "MERCADO PAGO", limpiar_monto(match.group(1))
-            if "NARANJA" in texto_upper:
-                match = re.search(r"TOTAL\s*\$\s*([\d\.,]+)", texto_upper)
-                if match: return "NARANJA", limpiar_monto(match.group(1))
-    except: return None, 0
+            texto = "".join([p.extract_text() for p in pdf.pages]).upper()
+            if "BBVA" in texto:
+                m = re.search(r"SALDO ACTUAL\s*[\$]*\s*([\d\.,]+)", texto)
+                return "BBVA VISA", limpiar_monto(m.group(1)) if m else 0
+            if "TOTAL NETO->" in texto:
+                m = re.search(r"TOTAL NETO->\s*([\d\.,]+)", texto)
+                return "RECIBO ANSA", limpiar_monto(m.group(1)) if m else 0
+            if "DEBITAREMOS DE SU C.A." in texto:
+                m = re.search(r"LA SUMA DE\s*\$\s*([\d\.,]+)", texto)
+                return "MACRO VISA", limpiar_monto(m.group(1)) if m else 0
+            if "MERCADO PAGO" in texto or "TOTAL A PAGAR" in texto:
+                m = re.search(r"TOTAL A PAGAR\s*[\$]*\s*([\d\.,]+)", texto)
+                return "MERCADO PAGO", limpiar_monto(m.group(1)) if m else 0
+            if "NARANJA" in texto:
+                m = re.search(r"TOTAL\s*\$\s*([\d\.,]+)", texto)
+                return "NARANJA", limpiar_monto(m.group(1)) if m else 0
+    except: pass
     return "DESCONOCIDO", 0
 
-# --- LÓGICA DE ALMACENAMIENTO POR MES ---
-if 'datos_mensuales' not in st.session_state:
-    st.session_state.datos_mensuales = {}
-
-# --- SIDEBAR ---
-st.sidebar.title("📅 Periodo")
-mes_sel = st.sidebar.selectbox("Mes", ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"], index=datetime.now().month - 1)
-anio_sel = st.sidebar.selectbox("Año", [2024, 2025, 2026], index=2)
-
-id_periodo = f"{mes_sel}-{anio_sel}"
-
-if id_periodo not in st.session_state.datos_mensuales:
-    st.session_state.datos_mensuales[id_periodo] = {"ingresos": 0.0, "gastos": [], "archivos": []}
-
-periodo_actual = st.session_state.datos_mensuales[id_periodo]
-
-# --- CÁLCULOS ---
+# --- 6. INTERFAZ Y LÓGICA ---
 ingresos_totales = periodo_actual["ingresos"]
 gastos_totales = sum([g['monto'] for g in periodo_actual["gastos"]])
 balance = ingresos_totales - gastos_totales
 
-# --- INTERFAZ ---
 st.title(f"📊 Dashboard: {mes_sel} {anio_sel}")
 
-c1, c2, c3 = st.columns(3)
-c1.metric("💰 INGRESOS TOTALES", f"$ {ingresos_totales:,.2f}")
-c2.metric("💳 GASTOS TARJETAS", f"$ {gastos_totales:,.2f}")
-c3.metric("⚖️ DISPONIBLE", f"$ {balance:,.2f}")
+col1, col2, col3 = st.columns(3)
+col1.metric("💰 INGRESOS TOTALES", f"$ {ingresos_totales:,.2f}")
+col2.metric("💳 GASTOS TARJETAS", f"$ {gastos_totales:,.2f}")
+col3.metric("⚖️ DISPONIBLE", f"$ {balance:,.2f}")
 
 st.divider()
 
 st.subheader("📁 Cargar PDF (Recibo o Tarjeta)")
-
-# --- LA SOLUCIÓN: KEY DINÁMICA ---
-# Al incluir id_periodo en la key, el widget se reinicia al cambiar de mes
+# Key dinámica para resetear el uploader al cambiar de mes
 archivo = st.file_uploader("Subí tus archivos aquí", type="pdf", key=f"uploader_{id_periodo}")
 
-# --- PROCESAMIENTO ---
 if archivo and archivo.name not in periodo_actual["archivos"]:
     tipo, monto = procesar_archivo_universal(archivo)
     
     if tipo == "RECIBO ANSA":
         periodo_actual["ingresos"] += monto
         periodo_actual["archivos"].append(archivo.name)
-        st.rerun()
-    elif tipo != "DESCONOCIDO" and tipo != "ERROR_IMAGEN":
+    elif tipo != "DESCONOCIDO":
         periodo_actual["gastos"].append({"nombre": archivo.name, "tipo": tipo, "monto": monto})
         periodo_actual["archivos"].append(archivo.name)
-        st.rerun()
+    
+    # GUARDADO AUTOMÁTICO EN GOOGLE SHEETS
+    guardar_datos_gsheet(st.session_state.datos_mensuales)
+    st.rerun()
 
-# Mostrar archivos del mes seleccionado
+# Listado de archivos cargados
 if periodo_actual["archivos"]:
     with st.expander(f"📄 Archivos cargados en {mes_sel}"):
         for f in periodo_actual["archivos"]:
             st.write(f"- {f}")
 
-# --- TABLA Y GRÁFICO ---
-col_t, col_g = st.columns([1, 1])
+# --- 7. TABLA Y GRÁFICO ---
+c_tabla, c_grafico = st.columns([1, 1])
 
-with col_t:
+with c_tabla:
     if periodo_actual["gastos"]:
-        st.write("**Detalle de tarjetas:**")
-        df = pd.DataFrame(periodo_actual["gastos"])
-        st.dataframe(df[['tipo', 'monto']], use_container_width=True)
-        
+        st.write("**Detalle de consumos:**")
+        df_vis = pd.DataFrame(periodo_actual["gastos"])
+        st.dataframe(df_vis[['tipo', 'monto']], use_container_width=True)
+    
     if st.button("🗑️ Borrar datos de este mes"):
         st.session_state.datos_mensuales[id_periodo] = {"ingresos": 0.0, "gastos": [], "archivos": []}
+        guardar_datos_gsheet(st.session_state.datos_mensuales)
         st.rerun()
 
-with col_g:
+with c_grafico:
     if ingresos_totales > 0 or gastos_totales > 0:
-        datos_dict = {}
+        resumen = {}
         for g in periodo_actual["gastos"]:
-            datos_dict[g['tipo']] = datos_dict.get(g['tipo'], 0) + g['monto']
+            resumen[g['tipo']] = resumen.get(g['tipo'], 0) + g['monto']
+        if balance > 0:
+            resumen['Disponible'] = balance
         
-        if balance > 0: datos_dict['Disponible'] = balance
-        
-        fig = px.pie(values=list(datos_dict.values()), names=list(datos_dict.keys()), hole=0.6, template="plotly_dark")
+        fig = px.pie(values=list(resumen.values()), names=list(resumen.keys()), hole=0.5, template="plotly_dark")
         st.plotly_chart(fig, use_container_width=True)
