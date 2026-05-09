@@ -56,7 +56,6 @@ def procesar_archivo_universal(pdf_file):
     return "DESCONOCIDO", 0
 
 # --- LÓGICA DE ALMACENAMIENTO POR MES ---
-# Estructura: st.session_state.datos_mensuales = {"Mayo-2026": {"ingresos": 0, "gastos": [], "archivos": []}}
 if 'datos_mensuales' not in st.session_state:
     st.session_state.datos_mensuales = {}
 
@@ -65,14 +64,11 @@ st.sidebar.title("📅 Periodo")
 mes_sel = st.sidebar.selectbox("Mes", ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"], index=datetime.now().month - 1)
 anio_sel = st.sidebar.selectbox("Año", [2024, 2025, 2026], index=2)
 
-# Crear la "llave" del periodo actual
 id_periodo = f"{mes_sel}-{anio_sel}"
 
-# Inicializar el periodo si no existe
 if id_periodo not in st.session_state.datos_mensuales:
     st.session_state.datos_mensuales[id_periodo] = {"ingresos": 0.0, "gastos": [], "archivos": []}
 
-# Referencias directas al periodo actual para simplificar el código
 periodo_actual = st.session_state.datos_mensuales[id_periodo]
 
 # --- CÁLCULOS ---
@@ -91,7 +87,10 @@ c3.metric("⚖️ DISPONIBLE", f"$ {balance:,.2f}")
 st.divider()
 
 st.subheader("📁 Cargar PDF (Recibo o Tarjeta)")
-archivo = st.file_uploader("Subí tus archivos aquí", type="pdf")
+
+# --- LA SOLUCIÓN: KEY DINÁMICA ---
+# Al incluir id_periodo en la key, el widget se reinicia al cambiar de mes
+archivo = st.file_uploader("Subí tus archivos aquí", type="pdf", key=f"uploader_{id_periodo}")
 
 # --- PROCESAMIENTO ---
 if archivo and archivo.name not in periodo_actual["archivos"]:
@@ -121,14 +120,12 @@ with col_t:
         df = pd.DataFrame(periodo_actual["gastos"])
         st.dataframe(df[['tipo', 'monto']], use_container_width=True)
         
-    # Botón para borrar SOLO el mes actual en caso de error
     if st.button("🗑️ Borrar datos de este mes"):
         st.session_state.datos_mensuales[id_periodo] = {"ingresos": 0.0, "gastos": [], "archivos": []}
         st.rerun()
 
 with col_g:
     if ingresos_totales > 0 or gastos_totales > 0:
-        # Agrupar gastos por tipo para el gráfico
         datos_dict = {}
         for g in periodo_actual["gastos"]:
             datos_dict[g['tipo']] = datos_dict.get(g['tipo'], 0) + g['monto']
