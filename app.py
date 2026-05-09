@@ -19,23 +19,23 @@ if "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
 
 # --- 3. CONEXIÓN A GOOGLE SHEETS ---
 conn = st.connection("gsheets", type=GSheetsConnection)
-
 def cargar_datos_gsheet():
     try:
-        # ttl=0 para que siempre traiga los datos frescos del Excel
-        df = conn.read(ttl=0)
+        # Forzamos lectura de la pestaña específica
+        df = conn.read(worksheet="Hoja 1", ttl=0)
         datos = {}
         if df is not None and not df.empty:
-            # Eliminamos filas que no tengan Periodo (limpieza)
-            df = df.dropna(subset=['Periodo'])
-            for _, row in df.iterrows():
-                datos[str(row['Periodo'])] = {
-                    "ingresos": float(row['Ingresos']),
-                    "gastos": json.loads(row['Gastos_JSON']),
-                    "archivos": json.loads(row['Archivos_JSON'])
-                }
+            columnas = ['Periodo', 'Ingresos', 'Gastos_JSON', 'Archivos_JSON']
+            if all(col in df.columns for col in columnas):
+                df = df.dropna(subset=['Periodo'])
+                for _, row in df.iterrows():
+                    datos[str(row['Periodo'])] = {
+                        "ingresos": float(row['Ingresos']),
+                        "gastos": json.loads(row['Gastos_JSON']),
+                        "archivos": json.loads(row['Archivos_JSON'])
+                    }
         return datos
-    except Exception as e:
+    except:
         return {}
 
 def guardar_datos_gsheet(datos_dict):
@@ -53,23 +53,18 @@ def guardar_datos_gsheet(datos_dict):
     
     df_nuevo = pd.DataFrame(filas)
     
-    # Intentamos actualizar la hoja principal
     try:
-        conn.update(data=df_nuevo)
+        # Guardamos específicamente en Hoja 1
+        conn.update(worksheet="Hoja 1", data=df_nuevo)
         st.cache_data.clear()
+        st.sidebar.success("✅ Guardado en Drive")
     except Exception as e:
-        st.error(f"Error al guardar en Google Sheets: {e}")
-
+        st.error(f"Error al guardar: {e}")
 # --- 4. INICIALIZACIÓN DE DATOS ---
-# Usamos un botón manual para "Refrescar" si el automático falla
 if 'datos_mensuales' not in st.session_state or st.sidebar.button("🔄 Forzar Sincronización"):
+    st.cache_data.clear()  # <-- Esto limpia la memoria vieja
     with st.spinner("Buscando datos en la nube..."):
         st.session_state.datos_mensuales = cargar_datos_gsheet()
-        if not st.session_state.datos_mensuales:
-            st.sidebar.warning("No se encontraron datos guardados.")
-        else:
-            st.sidebar.success("Datos recuperados con éxito.")
-
 # --- 5. SIDEBAR (FILTROS) ---
 st.sidebar.title("📅 Periodo")
 meses = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
