@@ -54,6 +54,15 @@ def guardar_datos_gsheet(datos_dict):
     df_nuevo = pd.DataFrame(filas)
     
     try:
+        # Forzamos la actualización en la Hoja 1
+        conn.update(worksheet="Hoja 1", data=df_nuevo)
+        st.cache_data.clear()
+        # Usamos st.toast para que el aviso sea más visible
+        st.toast("✅ ¡Datos guardados en Drive!", icon="💾")
+        st.sidebar.success("✅ Guardado en Drive")
+    except Exception as e:
+        # Esto nos dirá si es un problema de permisos o de nombre de hoja
+        st.error(f"Falla al guardar: {e}")
         # Guardamos específicamente en Hoja 1
         conn.update(worksheet="Hoja 1", data=df_nuevo)
         st.cache_data.clear()
