@@ -18,21 +18,15 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- FUNCIÓN PARA LIMPIAR NÚMEROS (CORREGIDA) ---
+# --- FUNCIÓN PARA LIMPIAR MONTO ---
 def limpiar_monto(monto_str):
-    # Eliminamos símbolos de pesos y espacios
     monto_str = monto_str.replace("$", "").strip()
-    
-    # Si tiene punto y coma (ej: 512.512,14)
     if "." in monto_str and "," in monto_str:
         monto_str = monto_str.replace(".", "").replace(",", ".")
-    # Si solo tiene punto pero parece de miles (ej: 512.512)
     elif "." in monto_str and len(monto_str.split(".")[-1]) == 3:
         monto_str = monto_str.replace(".", "")
-    # Si tiene una coma como decimal (ej: 1234,56)
     elif "," in monto_str:
         monto_str = monto_str.replace(",", ".")
-        
     try:
         return float(monto_str)
     except:
@@ -44,7 +38,6 @@ def procesar_archivo_universal(pdf_file):
         with pdfplumber.open(pdf_file) as pdf:
             texto = "".join([p.extract_text() for p in pdf.pages])
             if not texto.strip(): return "ERROR_IMAGEN", 0
-
             texto_upper = texto.upper()
 
             # 1. BBVA 
@@ -52,7 +45,7 @@ def procesar_archivo_universal(pdf_file):
                 match = re.search(r"SALDO ACTUAL\s*[\$]*\s*([\d\.,]+)", texto_upper)
                 if match: return "BBVA VISA", limpiar_monto(match.group(1))
 
-            # 2. RECIBO ANSA (Corregido para tu formato exacto)
+            # 2. RECIBO ANSA
             if "TOTAL NETO->" in texto_upper:
                 match = re.search(r"TOTAL NETO->\s*([\d\.,]+)", texto_upper)
                 if match: return "RECIBO ANSA", limpiar_monto(match.group(1))
@@ -105,14 +98,17 @@ if archivo:
     tipo, monto = procesar_archivo_universal(archivo)
     
     if tipo == "ERROR_IMAGEN":
-        st.error("⚠️ Recordá usar Adobe Scan.")
+        st.error("⚠️ PDF sin texto. Usá Adobe Scan.")
     elif tipo == "RECIBO ANSA":
         st.session_state.ingresos = monto
-        st.success(f"✅ Sueldo corregido: $ {monto:,.2f}")
+        # --- AQUÍ ESTÁ EL CAMBIO ---
+        st.success(f"✅ Ingreso cargado: $ {monto:,.2f}")
     elif tipo != "DESCONOCIDO":
         if not any(d['nombre'] == archivo.name for d in st.session_state.historial):
             st.session_state.historial.append({"nombre": archivo.name, "tipo": tipo, "monto": monto})
-            st.success(f"✅ {tipo} sumada.")
+            st.success(f"✅ {tipo} cargada correctamente.")
+    else:
+        st.warning("❓ No pude identificar el banco.")
 
 # --- TABLA Y GRÁFICO ---
 col_t, col_g = st.columns([1, 1])
@@ -129,7 +125,6 @@ with col_t:
 
 with col_g:
     if st.session_state.ingresos > 0 or gastos_totales > 0:
-        # Preparamos datos limpios para el gráfico
         datos = {item['tipo']: item['monto'] for item in st.session_state.historial}
         if balance > 0: datos['Disponible'] = balance
         fig = px.pie(values=list(datos.values()), names=list(datos.keys()), hole=0.6, template="plotly_dark")
